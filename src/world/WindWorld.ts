@@ -10,6 +10,8 @@ import { PlayerController } from './PlayerController';
 import { EnvironmentDetails } from './EnvironmentDetails';
 import { DistantMountains } from './DistantMountains';
 import { AmbientParticles } from './AmbientParticles';
+import { PostProcessing } from './PostProcessing';
+import { GodRays } from './GodRays';
 
 export class WindWorld {
   private scene: THREE.Scene;
@@ -29,10 +31,13 @@ export class WindWorld {
   private player!: PlayerController;
   private environment!: EnvironmentDetails;
   private ambientParticles!: AmbientParticles;
+  private postProcessing!: PostProcessing;
+  private godRays!: GodRays;
 
   private windDirection = new THREE.Vector3(1, 0, 0.3).normalize();
   private windStrength = 0.5;
   private time = 0;
+  private sunDirection = new THREE.Vector3(0.5, 0.7, 0.3).normalize();
 
   constructor(container: HTMLElement, onReady: () => void) {
     this.container = container;
@@ -40,7 +45,7 @@ export class WindWorld {
 
     // Scene setup
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2(0x8faab5, 0.008);
+    this.scene.fog = new THREE.FogExp2(0x8faab5, 0.006);
 
     // Camera
     this.camera = new THREE.PerspectiveCamera(
@@ -51,7 +56,7 @@ export class WindWorld {
     );
     this.camera.position.set(0, 15, 30);
 
-    // Renderer
+    // Renderer with enhanced settings
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: false,
@@ -59,8 +64,7 @@ export class WindWorld {
     });
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.2;
+    this.renderer.toneMapping = THREE.NoToneMapping; // We handle this in post-processing
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(this.renderer.domElement);
@@ -78,14 +82,24 @@ export class WindWorld {
     this.environment = new EnvironmentDetails(this.scene, this.terrain);
     new DistantMountains(this.scene);
     this.ambientParticles = new AmbientParticles(this.scene);
+    this.godRays = new GodRays(this.scene, this.camera);
+
+    // Post-processing
+    this.postProcessing = new PostProcessing(
+      this.renderer,
+      container.clientWidth,
+      container.clientHeight
+    );
 
     // Start audio on first interaction
     const startAudio = () => {
       this.audio.start();
       container.removeEventListener('click', startAudio);
+      container.removeEventListener('touchstart', startAudio);
       container.removeEventListener('keydown', startAudio);
     };
     container.addEventListener('click', startAudio);
+    container.addEventListener('touchstart', startAudio);
     container.addEventListener('keydown', startAudio);
 
     // Handle resize
@@ -98,34 +112,55 @@ export class WindWorld {
     }, 500);
   }
 
+  // Public interface for mobile controls
+  setMobileMove(x: number, y: number) {
+    this.player.setMobileMove(x, y);
+  }
+
+  setMobileLook(dx: number, dy: number) {
+    this.player.setMobileLook(dx, dy);
+  }
+
+  setMobileAction(action: 'rise' | 'glide' | null) {
+    this.player.setMobileAction(action);
+  }
+
   private initLighting() {
     // Ambient light
-    const ambient = new THREE.AmbientLight(0x6688aa, 0.4);
+    const ambient = new THREE.AmbientLight(0x6688aa, 0.5);
     this.scene.add(ambient);
 
     // Hemisphere light for sky/ground color
-    const hemi = new THREE.HemisphereLight(0x87ceeb, 0x3a5f3a, 0.6);
+    const hemi = new THREE.HemisphereLight(0x87ceeb, 0x3a5f3a, 0.7);
     this.scene.add(hemi);
 
-    // Main directional light (sun)
-    const sun = new THREE.DirectionalLight(0xffeedd, 1.5);
+    // Main directional light (sun) - enhanced shadows
+    const sun = new THREE.DirectionalLight(0xffeedd, 1.8);
     sun.position.set(50, 80, 30);
     sun.castShadow = true;
-    sun.shadow.mapSize.width = 2048;
-    sun.shadow.mapSize.height = 2048;
+    sun.shadow.mapSize.width = 4096;
+    sun.shadow.mapSize.height = 4096;
     sun.shadow.camera.near = 0.5;
-    sun.shadow.camera.far = 200;
-    sun.shadow.camera.left = -80;
-    sun.shadow.camera.right = 80;
-    sun.shadow.camera.top = 80;
-    sun.shadow.camera.bottom = -80;
-    sun.shadow.bias = -0.0005;
+    sun.shadow.camera.far = 250;
+    sun.shadow.camera.left = -100;
+    sun.shadow.camera.right = 100;
+    sun.shadow.camera.top = 100;
+    sun.shadow.camera.bottom = -100;
+    sun.shadow.bias = -0.0003;
+    sun.shadow.normalBias = 0.02;
+    sun.shadow.radius = 4; // Soft shadow edges
     this.scene.add(sun);
+    this.scene.add(sun.target);
 
     // Soft fill light
-    const fill = new THREE.DirectionalLight(0x8899bb, 0.3);
+    const fill = new THREE.DirectionalLight(0x8899bb, 0.4);
     fill.position.set(-30, 20, -20);
     this.scene.add(fill);
+
+    // Warm backlight for rim effects
+    const back = new THREE.DirectionalLight(0xffddaa, 0.3);
+    back.position.set(-20, 30, -50);
+    this.scene.add(back);
   }
 
   private animate = () => {
@@ -135,7 +170,7 @@ export class WindWorld {
     this.time += delta;
 
     // Update wind
-    this.windStrength = 0.3 + Math.sin(this.time * 0.2) * 0.2 + Math.sin(this.time * 0.05) * 0.1;
+    this.windStrength = 0.3 + Math.sin(this.time * 0.2) * 0.2 + Math.sin(this.time * 0.05) * 0.15;
     this.windDirection.set(
       Math.cos(this.time * 0.03) * 0.5 + 0.5,
       0,
@@ -144,14 +179,15 @@ export class WindWorld {
 
     // Update all systems
     this.player.update(delta);
-    this.grass.update(this.time, this.windDirection, this.windStrength);
-    this.trees.update(this.time, this.windDirection, this.windStrength);
-    this.water.update(this.time);
-    this.water.updateCamera(this.camera.position);
+    this.terrain.update(this.time, this.sunDirection);
+    this.grass.update(this.time, this.windDirection, this.windStrength, this.sunDirection);
+    this.trees.update(this.time, this.windDirection, this.windStrength, this.sunDirection);
+    this.water.update(this.time, this.camera.position, this.sunDirection);
     this.windParticles.update(delta, this.windDirection, this.windStrength, this.camera.position);
-    this.sky.update(this.time);
+    this.sky.update(this.time, this.sunDirection);
     this.environment.update(this.time);
     this.ambientParticles.update(this.time, this.camera.position);
+    this.godRays.update(this.time, this.camera, this.sunDirection);
     this.audio.update(this.windStrength);
 
     // Update shadow camera to follow player
@@ -168,7 +204,8 @@ export class WindWorld {
       sun.target.updateMatrixWorld();
     }
 
-    this.renderer.render(this.scene, this.camera);
+    // Render with post-processing
+    this.postProcessing.render(this.scene, this.camera, this.time);
   };
 
   private onResize = () => {
@@ -177,6 +214,7 @@ export class WindWorld {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+    this.postProcessing.resize(width, height);
   };
 
   dispose() {
@@ -184,6 +222,7 @@ export class WindWorld {
     window.removeEventListener('resize', this.onResize);
     this.audio.dispose();
     this.player.dispose();
+    this.postProcessing.dispose();
     this.renderer.dispose();
     if (this.renderer.domElement.parentElement) {
       this.renderer.domElement.parentElement.removeChild(this.renderer.domElement);
