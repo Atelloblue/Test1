@@ -13,6 +13,7 @@ export class PlayerController {
   private riseSpeed = 8;
   private damping = 0.9;
   private mouseSensitivity = 0.002;
+  private touchSensitivity = 0.004;
 
   private euler = new THREE.Euler(0, 0, 0, 'YXZ');
   private keys: Record<string, boolean> = {};
@@ -21,6 +22,11 @@ export class PlayerController {
   private headBob = 0;
   private headBobSpeed = 0;
   private cameraBaseY = 3;
+
+  // Mobile input
+  private mobileMove = new THREE.Vector2(0, 0);
+  private mobileRising = false;
+  private mobileGliding = false;
 
   constructor(camera: THREE.PerspectiveCamera, container: HTMLElement, terrain: TerrainGenerator) {
     this.camera = camera;
@@ -37,6 +43,25 @@ export class PlayerController {
     document.addEventListener('mousemove', this.onMouseMove);
     document.addEventListener('keydown', this.onKeyDown);
     document.addEventListener('keyup', this.onKeyUp);
+  }
+
+  // Mobile control interface
+  setMobileMove(x: number, y: number) {
+    this.mobileMove.set(x, y);
+  }
+
+  setMobileLook(dx: number, dy: number) {
+    if (dx === 0 && dy === 0) return;
+    this.euler.setFromQuaternion(this.camera.quaternion);
+    this.euler.y -= dx * this.touchSensitivity;
+    this.euler.x -= dy * this.touchSensitivity;
+    this.euler.x = Math.max(-Math.PI / 2.5, Math.min(Math.PI / 2.5, this.euler.x));
+    this.camera.quaternion.setFromEuler(this.euler);
+  }
+
+  setMobileAction(action: 'rise' | 'glide' | null) {
+    this.mobileRising = action === 'rise';
+    this.mobileGliding = action === 'glide';
   }
 
   private onPointerLock = () => {
@@ -83,24 +108,33 @@ export class PlayerController {
     const right = new THREE.Vector3();
     right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
 
+    // Keyboard input
     if (this.keys['KeyW'] || this.keys['ArrowUp']) this.direction.add(forward);
     if (this.keys['KeyS'] || this.keys['ArrowDown']) this.direction.sub(forward);
     if (this.keys['KeyA'] || this.keys['ArrowLeft']) this.direction.sub(right);
     if (this.keys['KeyD'] || this.keys['ArrowRight']) this.direction.add(right);
+
+    // Mobile input
+    if (this.mobileMove.length() > 0.1) {
+      this.direction.addScaledVector(forward, this.mobileMove.y);
+      this.direction.addScaledVector(right, this.mobileMove.x);
+    }
 
     if (this.direction.length() > 0) {
       this.direction.normalize();
     }
 
     // Speed
-    const speed = this.keys['ShiftLeft'] || this.keys['ShiftRight'] ? this.glideSpeed : this.moveSpeed;
+    const isGliding = this.keys['ShiftLeft'] || this.keys['ShiftRight'] || this.mobileGliding;
+    const speed = isGliding ? this.glideSpeed : this.moveSpeed;
 
     // Apply movement
     this.velocity.x += this.direction.x * speed * delta;
     this.velocity.z += this.direction.z * speed * delta;
 
     // Rise/fall
-    if (this.keys['Space']) {
+    const isRising = this.keys['Space'] || this.mobileRising;
+    if (isRising) {
       this.velocity.y += this.riseSpeed * delta;
     } else {
       // Gentle gravity towards terrain height + offset
@@ -133,7 +167,7 @@ export class PlayerController {
     // Head bob when moving
     const isMoving = this.direction.length() > 0.1;
     if (isMoving) {
-      this.headBobSpeed += delta * (this.keys['ShiftLeft'] ? 6 : 4);
+      this.headBobSpeed += delta * (isGliding ? 6 : 4);
       this.headBob = Math.sin(this.headBobSpeed) * 0.08;
     } else {
       this.headBob *= 0.95;

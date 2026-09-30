@@ -4,7 +4,7 @@ export class WindParticles {
   private particles: THREE.Points;
   private velocities: Float32Array;
   private lifetimes: Float32Array;
-  private particleCount = 2000;
+  private particleCount = 3000;
   private range = 80;
 
   constructor(scene: THREE.Scene) {
@@ -12,41 +12,57 @@ export class WindParticles {
     const positions = new Float32Array(this.particleCount * 3);
     const sizes = new Float32Array(this.particleCount);
     const alphas = new Float32Array(this.particleCount);
+    const randoms = new Float32Array(this.particleCount);
     this.velocities = new Float32Array(this.particleCount * 3);
     this.lifetimes = new Float32Array(this.particleCount);
 
     for (let i = 0; i < this.particleCount; i++) {
       this.resetParticle(i, positions, new THREE.Vector3(0, 10, 0));
-      sizes[i] = 0.1 + Math.random() * 0.3;
+      sizes[i] = 0.1 + Math.random() * 0.4;
       alphas[i] = Math.random();
+      randoms[i] = Math.random();
     }
 
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
     geometry.setAttribute('alpha', new THREE.BufferAttribute(alphas, 1));
+    geometry.setAttribute('aRandom', new THREE.BufferAttribute(randoms, 1));
 
     const material = new THREE.ShaderMaterial({
       vertexShader: `
         attribute float size;
         attribute float alpha;
+        attribute float aRandom;
         varying float vAlpha;
+        varying float vRandom;
         
         void main() {
           vAlpha = alpha;
+          vRandom = aRandom;
           vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-          gl_PointSize = size * (200.0 / -mvPosition.z);
+          gl_PointSize = size * (250.0 / -mvPosition.z);
+          gl_PointSize = max(gl_PointSize, 1.0);
           gl_Position = projectionMatrix * mvPosition;
         }
       `,
       fragmentShader: `
         varying float vAlpha;
+        varying float vRandom;
         
         void main() {
-          float dist = length(gl_PointCoord - vec2(0.5));
+          vec2 center = gl_PointCoord - vec2(0.5);
+          float dist = length(center);
           if (dist > 0.5) discard;
           
-          float alpha = smoothstep(0.5, 0.0, dist) * vAlpha * 0.4;
-          gl_FragColor = vec4(1.0, 1.0, 1.0, alpha);
+          // Soft circular particle with glow
+          float core = smoothstep(0.5, 0.0, dist);
+          float glow = smoothstep(0.5, 0.2, dist) * 0.5;
+          float alpha = (core + glow) * vAlpha * 0.5;
+          
+          // Slightly warm tinted
+          vec3 color = mix(vec3(1.0, 1.0, 1.0), vec3(1.0, 0.95, 0.85), vRandom);
+          
+          gl_FragColor = vec4(color, alpha);
         }
       `,
       transparent: true,
@@ -64,7 +80,7 @@ export class WindParticles {
     
     // Spawn around camera with offset
     positions[idx] = cameraPos.x + (Math.random() - 0.5) * this.range;
-    positions[idx + 1] = cameraPos.y + (Math.random() - 0.3) * 30;
+    positions[idx + 1] = cameraPos.y + (Math.random() - 0.3) * 30 - 5;
     positions[idx + 2] = cameraPos.z + (Math.random() - 0.5) * this.range;
 
     // Velocity
@@ -84,14 +100,24 @@ export class WindParticles {
     for (let i = 0; i < this.particleCount; i++) {
       const idx = i * 3;
 
-      // Apply wind
-      posArray[idx] += (this.velocities[idx] + windDir.x * windStrength * 8) * delta;
-      posArray[idx + 1] += (this.velocities[idx + 1] + Math.sin(this.lifetimes[i] * 10) * 0.5) * delta;
-      posArray[idx + 2] += (this.velocities[idx + 2] + windDir.z * windStrength * 4) * delta;
+      // Apply wind with turbulence
+      const turbulence = Math.sin(this.lifetimes[i] * 8.0 + i) * 0.5;
+      posArray[idx] += (this.velocities[idx] + windDir.x * windStrength * 10 + turbulence) * delta;
+      posArray[idx + 1] += (this.velocities[idx + 1] + Math.sin(this.lifetimes[i] * 5) * 0.8) * delta;
+      posArray[idx + 2] += (this.velocities[idx + 2] + windDir.z * windStrength * 5) * delta;
 
       // Update lifetime
-      this.lifetimes[i] += delta * 0.3;
-      alphaArray[i] = Math.sin(this.lifetimes[i] * Math.PI) * 0.6;
+      this.lifetimes[i] += delta * 0.2;
+      
+      // Fade in/out
+      const life = this.lifetimes[i];
+      if (life < 0.1) {
+        alphaArray[i] = life * 10;
+      } else if (life > 0.8) {
+        alphaArray[i] = (1.0 - life) * 5;
+      } else {
+        alphaArray[i] = 0.6 + Math.sin(life * 10) * 0.2;
+      }
 
       // Reset if too far or dead
       const dx = posArray[idx] - cameraPos.x;
